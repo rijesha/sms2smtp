@@ -8,12 +8,9 @@ using Android.Content;
 using Android.Provider;
 using Android.Telephony;
 using Android.Net;
+using System.Threading;
+using Java.Text;
 
-//things to do
-//queue up unsent messages
-//have app turn on at startup
-//read sms messages
-//save password securely
 namespace sms2smtp
 {
     [BroadcastReceiver]
@@ -23,23 +20,6 @@ namespace sms2smtp
         public override void OnReceive(Context context, Intent intent)
         {
             Configuration.canSend = !intent.GetBooleanExtra(ConnectivityManager.ExtraNoConnectivity, false);
-            Console.WriteLine("NETWORK CHANGED ");
-            Console.WriteLine(Configuration.canSend);
-            Console.WriteLine("****************************************");
-        }
-    }
-
-    [BroadcastReceiver]
-    [IntentFilter(new[] { Intent.ActionBootCompleted, "android.intent.action.QUICKBOOT_POWERON" })]
-    public class BootReceiver : BroadcastReceiver
-    {
-        public override void OnReceive(Context context, Intent intent)
-        {
-            //Toast.MakeText(context, "Received intent!", ToastLength.Long).Show();
-            Intent serviceStart = new Intent(context, typeof(SmsSenderService));
-            serviceStart.AddFlags(ActivityFlags.NewTask);
-            serviceStart.SetAction("My.Action");
-            context.StartService(serviceStart);
         }
     }
 
@@ -49,34 +29,37 @@ namespace sms2smtp
     {
         public override void OnReceive(Context context, Intent intent)
         {
-            Toast.MakeText(context, "Received intent!", ToastLength.Long).Show();
+            Toast.MakeText(context, "sms2smtp: Sending SMS!", ToastLength.Long).Show();
             if (Telephony.Sms.Intents.SmsReceivedAction.Equals(intent.Action))
             {
                 foreach (SmsMessage smsMessage in Telephony.Sms.Intents.GetMessagesFromIntent(intent))
                 {
                     String messageBody = smsMessage.MessageBody;
-                    System.Diagnostics.Debug.WriteLine(messageBody);
+
+                    Intent serviceStart = new Intent(context, typeof(SmsSenderService));
+                    serviceStart.AddFlags(ActivityFlags.NewTask);
+                    serviceStart.SetAction("My.Action");
+                    serviceStart.PutExtra("time", new SimpleDateFormat("yyyy.MM.dd G 'at' HH:mm:ss").Format(smsMessage.TimestampMillis));
+                    serviceStart.PutExtra("number", smsMessage.OriginatingAddress);
+                    serviceStart.PutExtra("body", smsMessage.MessageBody);
+                    context.StartService(serviceStart);
+
                 }
             }
-            Intent serviceStart = new Intent(context, typeof(SmsSenderService));
-            serviceStart.AddFlags(ActivityFlags.NewTask);
-            serviceStart.SetAction("My.Action");
-            context.StartService(serviceStart);
-            /*
-            Intent serviceStart = new Intent(context, typeof(MainActivity));
-            serviceStart.AddFlags(ActivityFlags.NewTask);
-            context.StartActivity(serviceStart);*/
         }
     }
 
     [Service(Exported = true)]
-    public class SmsSenderService : Service
+    public class SmsSenderService : IntentService
     {
 
         public override void OnCreate()
         {
             base.OnCreate();
-            Configuration.Initialize();
+            if (!Configuration.isInitialized)
+            {
+                Configuration.Initialize();
+            }
         }
 
         public override IBinder OnBind(Intent intent)
@@ -84,24 +67,40 @@ namespace sms2smtp
             throw new NotImplementedException();
         }
 
-        public override StartCommandResult OnStartCommand(Android.Content.Intent intent, StartCommandFlags flags, int startId)
+        protected override void OnHandleIntent(Intent intent)
         {
-            // This method executes on the main thread of the application.
+            String time = intent.GetStringExtra("time");
+            String number = intent.GetStringExtra("number");
+            String body = intent.GetStringExtra("body");
+
             if (Configuration.isInitialized)
             {
-                Configuration.sendTestEmail();
+                bool send_successful = false;
+                while (!send_successful)
+                {
+                    try
+                    {
+                        MailMessage mail = new MailMessage();
+
+                        mail.From = new MailAddress(Configuration.fromemail);
+                        mail.To.Add(Configuration.toemail);
+                        mail.Subject = "New SMS from " + number;
+                        mail.Body = "On " + time + " you got a new sms from " + number + ":\n\n" + body;
+                        Configuration.SmtpServer.Send(mail);
+                        send_successful = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Thread.Sleep(5000);
+                    }
+                }
             }
-
-            return StartCommandResult.Sticky;
         }
-
-
     }
 
     public static class Configuration
     {
         public static SmtpClient SmtpServer;
-        //tannkkfussgrwhga
         public static string host = "";
         public static string port = "";
         public static string password = "";
@@ -116,7 +115,7 @@ namespace sms2smtp
         {
             if (!isInitialized)
             {
-                retrievedata();
+                loadConfiguration();
                 if (isSetup == "true")
                 {
                     setupSMTP();
@@ -126,7 +125,7 @@ namespace sms2smtp
             return isInitialized;
         }
 
-        public static void retrievedata()
+        public static void loadConfiguration()
         {
             //retreive
             var prefs = Application.Context.GetSharedPreferences("smtp_settings", FileCreationMode.Private);
@@ -138,7 +137,7 @@ namespace sms2smtp
             isSetup = prefs.GetString("isSetup", "false");
         }
 
-        public static void saveprefs()
+        public static void saveConfiguration()
         {
             //store
             isSetup = "true";
@@ -177,10 +176,9 @@ namespace sms2smtp
 
                 SmtpServer.Send(mail);
             }
-            catch (Exception ex)
+            catch 
             {
-                //System.Diagnostics.Debug.WriteLine("---------###----------------");
-                System.Diagnostics.Debug.WriteLine(ex);
+
             }
         }
     }
@@ -191,7 +189,6 @@ namespace sms2smtp
         protected override void OnCreate(Bundle savedInstanceState)
         {
             base.OnCreate(savedInstanceState);
-
             // Set our view from the "main" layout resource
             SetContentView(Resource.Layout.Main);
 
@@ -205,7 +202,6 @@ namespace sms2smtp
             EditText email_to_field_txt = FindViewById<EditText>(Resource.Id.email_to_field);
 
             TextView configured_box = FindViewById<TextView>(Resource.Id.configured_box);
-
             Configuration.Initialize();
             if (Configuration.isInitialized)
             {
@@ -217,7 +213,6 @@ namespace sms2smtp
 
                 configured_box.Text = "CONFIGURED";
             }
-
             button.Click += delegate {
                 Configuration.host = host_txt.Text;
                 Configuration.port = port_txt.Text;
@@ -225,7 +220,7 @@ namespace sms2smtp
                 Configuration.fromemail = email_from_txt.Text;
                 Configuration.toemail = email_to_field_txt.Text;
                 Configuration.setupSMTP();
-                Configuration.saveprefs();
+                Configuration.saveConfiguration();
                 Configuration.sendTestEmail();
 
                 configured_box.Text = "CONFIGURED";
