@@ -13,16 +13,6 @@ using Java.Text;
 
 namespace sms2smtp
 {
-    [BroadcastReceiver]
-    [IntentFilter(new[] { "android.net.conn.CONNECTIVITY_CHANGE" })]
-    public class NetworkChangeReceiver : BroadcastReceiver
-    {
-        public override void OnReceive(Context context, Intent intent)
-        {
-            Configuration.canSend = !intent.GetBooleanExtra(ConnectivityManager.ExtraNoConnectivity, false);
-        }
-    }
-
     [BroadcastReceiver(Enabled = true, Exported = true)]
     [IntentFilter(new[] { "android.provider.Telephony.SMS_RECEIVED" })]
     class SmsListener : BroadcastReceiver
